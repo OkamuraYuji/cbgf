@@ -72,7 +72,7 @@ def chat_endpoint():
         return json.dumps(response, ensure_ascii=False), 200, {'Content-Type': 'application/json; charset=utf-8'}
 
     except Exception as e:
-        response = {"error": f"Lỗi hệ thống: {e}"}
+        response = {"error": f"Lỗi: {e}"}
         return json.dumps(response, ensure_ascii=False), 500, {'Content-Type': 'application/json; charset=utf-8'}
 
 if __name__ == "__main__":
