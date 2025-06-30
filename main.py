@@ -1,79 +1,88 @@
 import json
 import os
-from flask import Flask, request
+from typing import Dict, Optional
+from flask import Flask, request, jsonify
 from g4f.client import Client
 
 class AIAssistant:
-    CONFIG_FILE = "config.json"
-    MAX_HISTORY = 10  
-    MODELS = ["gemini-1.5-pro", "gemini-2.0-flash"]
+    CONFIG_FILE: str = "config.json"
+    MAX_HISTORY: int = 10
+    MODELS: list = ["gemini-1.5-pro", "gemini-2.0-flash"]
+    DEFAULT_INSTRUCTION: str = "Bạn là một trợ lý AI hữu ích, trả lời chính xác và ngắn gọn."
 
     def __init__(self):
         self.client = Client()
-        self.messages = []
-        self.instruction = self._load_config()
+        self.messages: list = []
+        self.instruction: str = self._load_config()
 
-    @staticmethod
-    def _load_config() -> str:
-        """Load config từ file, nếu lỗi thì trả về chuỗi rỗng."""
-        if os.path.isfile(AIAssistant.CONFIG_FILE):
-            try:
-                with open(AIAssistant.CONFIG_FILE, "r", encoding="utf-8") as file:
-                    return json.load(file).get("instruction", "")
-            except (json.JSONDecodeError, IOError):
-                pass
-        return ""  # Mặc định không có hướng dẫn nếu file lỗi hoặc không tồn tại
+    def _load_config(self) -> str:
+        """Load cấu hình từ file JSON, trả về instruction mặc định nếu lỗi."""
+        if not os.path.isfile(self.CONFIG_FILE):
+            return self.DEFAULT_INSTRUCTION
+        
+        try:
+            with open(self.CONFIG_FILE, "r", encoding="utf-8") as file:
+                config = json.load(file)
+                return config.get("instruction", self.DEFAULT_INSTRUCTION)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Lỗi khi đọc config: {e}")
+            return self.DEFAULT_INSTRUCTION
 
-    def _trim_history(self):
-        """Giới hạn lịch sử tin nhắn để tối ưu bộ nhớ."""
-        self.messages = self.messages[-self.MAX_HISTORY:]  
+    def _trim_history(self) -> None:
+        """Giới hạn lịch sử tin nhắn và đảm bảo system instruction ở đầu."""
+        if len(self.messages) > self.MAX_HISTORY:
+            self.messages = self.messages[-self.MAX_HISTORY:]
+        
         if not self.messages or self.messages[0]["role"] != "system":
             self.messages.insert(0, {"role": "system", "content": self.instruction})
 
-    def _call_model(self, model: str) -> str:
-        """Gửi tin nhắn đến AI model và xử lý phản hồi."""
+    def _call_model(self, model: str) -> Optional[str]:
+        """Gửi yêu cầu đến AI model và trả về phản hồi hoặc None nếu lỗi."""
         try:
             response = self.client.chat.completions.create(
-                model=model, messages=self.messages, web_search=False
+                model=model,
+                messages=self.messages,
+                web_search=False
             )
             return response.choices[0].message.content
         except Exception as e:
-            return f"error: {e}"
+            print(f"Lỗi khi gọi model {model}: {e}")
+            return None
 
     def chat(self, user_message: str) -> str:
-        """Gửi tin nhắn đến AI và lấy phản hồi với fallback model."""
+        """Xử lý tin nhắn người dùng với fallback giữa các model."""
         self.messages.append({"role": "user", "content": user_message})
         self._trim_history()
 
         for model in self.MODELS:
-            bot_reply = self._call_model(model)
-            if not bot_reply.startswith("error:"):
-                self.messages.append({"role": "assistant", "content": bot_reply})
+            response = self._call_model(model)
+            if response:
+                self.messages.append({"role": "assistant", "content": response})
                 self._trim_history()
-                return bot_reply
+                return response
 
-        return "Xin lỗi, hệ thống đang gặp lỗi. Vui lòng thử lại sau!"
+        return "Hệ thống tạm thời không phản hồi. Vui lòng thử lại sau."
 
-# Khởi tạo Flask app
 app = Flask(__name__)
 
 @app.route('/chat', methods=['GET', 'POST'])
 def chat_endpoint():
-    """API chat hỗ trợ cả GET và POST."""
+    """API endpoint xử lý yêu cầu chat qua GET hoặc POST."""
     try:
-        message = request.args.get("message", "").strip() if request.method == "GET" else request.json.get("message", "").strip()
+        # Lấy message từ GET hoặc POST
+        message = (request.args.get("message", "").strip() if request.method == "GET"
+                  else request.json.get("message", "").strip())
 
         if not message:
-            response = {"error": "Vui lòng cung cấp tin nhắn"}
-            return json.dumps(response, ensure_ascii=False), 400, {'Content-Type': 'application/json; charset=utf-8'}
-        
+            return jsonify({"error": "Vui lòng cung cấp tin nhắn"}), 400
+
         assistant = AIAssistant()
-        response = {"message": assistant.chat(message)}
-        return json.dumps(response, ensure_ascii=False), 200, {'Content-Type': 'application/json; charset=utf-8'}
+        response = assistant.chat(message)
+        return jsonify({"message": response}), 200
 
     except Exception as e:
-        response = {"error": f"Lỗi hệ thống: {e}"}
-        return json.dumps(response, ensure_ascii=False), 500, {'Content-Type': 'application/json; charset=utf-8'}
+        print(f"Lỗi hệ thống: {e}")
+        return jsonify({"error": f"Lỗi hệ thống: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
